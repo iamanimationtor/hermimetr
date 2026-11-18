@@ -76,6 +76,16 @@ export function apiFailure(error: unknown) {
   if (error instanceof ZodError) return Response.json({ error: error.issues[0]?.message || "ورودی معتبر نیست." }, { status: 400 });
   if (error instanceof ApiError || error instanceof CalculationError) return Response.json({ error: error.message }, { status: error instanceof ApiError ? error.status : 400 });
   if (error instanceof RuleError) return Response.json({ error: error.message, kind: error.kind }, { status: 400 });
+  const message = error instanceof Error ? error.message : "";
+  // Missing or unreachable DB — surface as actionable 503 instead of generic 500
+  if (message.includes("DATABASE_URL")) {
+    console.error("[api] DATABASE_URL missing", error);
+    return Response.json({ error: "پیکربندی پایگاه داده کامل نیست. متغیر DATABASE_URL را در تنظیمات محیط (Netlify → Environment variables) تنظیم و دوباره دیپلوی کنید." }, { status: 503 });
+  }
+  if (/connect ECONNREFUSED|getaddrinfo ENOTFOUND|Connection terminated|timeout expired|connectionTimeoutMillis|self signed certificate/i.test(message)) {
+    console.error("[api] DB connection failed", error);
+    return Response.json({ error: "اتصال به پایگاه داده برقرار نشد. مقدار DATABASE_URL و دسترسی شبکه دیتابیس را بررسی کنید." }, { status: 503 });
+  }
   console.error("API error", error);
   return Response.json({ error: "خطای داخلی رخ داد. دوباره تلاش کنید." }, { status: 500 });
 }

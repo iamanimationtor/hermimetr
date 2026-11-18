@@ -151,23 +151,38 @@ export default function Workspace() {
   const f = (key: string) => String(form[key] ?? "");
   const change = (key: string, value: string | boolean) => setForm((old) => ({ ...old, [key]: value }));
 
+  // Abort any in-flight refresh if it hangs (e.g. DB unreachable on Netlify)
+  const refreshAbort = useRef<AbortController | null>(null);
+  function fetchWithTimeout(input: string, init: RequestInit = {}, ms = 12000): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), ms);
+    const signal = init.signal ? (init.signal as AbortSignal) : controller.signal;
+    // If caller already passed a signal we still enforce our timeout via controller
+    if (init.signal) controller.signal.addEventListener("abort", () => (init.signal as AbortSignal).throwIfAborted?.());
+    return sessionFetch(input, { ...init, signal: controller.signal }).finally(() => clearTimeout(timer));
+  }
+
   async function refresh(silent = false, createGuest = false) {
+    // cancel previous hanging request
+    refreshAbort.current?.abort();
+    const abort = new AbortController();
+    refreshAbort.current = abort;
     if (!silent) setLoadingError("");
     try {
       // Once established, never silently replace a lost session with a new guest workspace.
       const existingOnly = (sessionEstablished.current || !!previewToken()) && !createGuest;
-      const response = await sessionFetch(existingOnly ? "/api/workspace?existing=1" : "/api/workspace", { cache: "no-store" });
-      const payload = await response.json();
-      if (!response.ok) throw new Error(payload.error || "بارگذاری ناموفق بود.");
-      let check = await sessionFetch("/api/auth/session", { cache: "no-store" });
-      let session = await check.json();
+      const response = await fetchWithTimeout(existingOnly ? "/api/workspace?existing=1" : "/api/workspace", { cache: "no-store", signal: abort.signal });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(payload.error || `بارگذاری ناموفق بود ( ${response.status} )`);
+      let check = await fetchWithTimeout("/api/auth/session", { cache: "no-store", signal: abort.signal });
+      let session = await check.json().catch(() => ({}));
       if (check.ok && session.userId !== payload.user.id) {
         const fallback = response.headers.get("x-metra-preview-session");
         if (fallback && /^[a-f0-9]{64}$/.test(fallback)) {
           const persisted = setPreviewToken(fallback);
           setMemoryOnlySession(!persisted);
-          check = await sessionFetch("/api/auth/session", { cache: "no-store" });
-          session = await check.json();
+          check = await fetchWithTimeout("/api/auth/session", { cache: "no-store", signal: abort.signal });
+          session = await check.json().catch(() => ({}));
           if (check.ok && session.userId === payload.user.id) setToast(persisted
             ? "حالت سازگار پیش‌نمایش فعال شد؛ نشست به این برگه محدود است."
             : "ذخیره‌سازی مرورگر مسدود است؛ نشست مهمان با بارگذاری مجدد از دست می‌رود. برای حفظ پروژه‌ها حساب بسازید.");
@@ -179,10 +194,20 @@ export default function Workspace() {
       setLoadingError("");
       return payload as WorkspaceData;
     } catch (error) {
+      if ((error as Error)?.name === "AbortError") {
+        const message = "اتصال به سرور برقرار نشد (زمان پاسخگویی تمام شد). تنظیمات پایگاه داده و شبکه را بررسی و دوباره تلاش کنید.";
+        setLoadingError(message);
+        setToast(message);
+console.error("[workspace] refresh timeout", error);
+        return null;
+      }
       const message = error instanceof Error ? error.message : "خطا در اتصال";
+      console.error("[workspace] refresh failed", error);
       setLoadingError(message);
       if (silent) setToast(message);
       return null;
+    } finally {
+      if (refreshAbort.current === abort) refreshAbort.current = null;
     }
   }
 
@@ -192,7 +217,16 @@ export default function Workspace() {
     setExpert(preference.get("metra_expert") === "yes");
     const nextView = new URLSearchParams(window.location.search).get("view") as View;
     if (nextView && nextView in viewLabels) setView(nextView);
-    if (!initializationStarted.current) { initializationStarted.current = true; void refresh(); }
+    if (!initializationStarted.current) {
+      initializationStarted.current = true;
+      void refresh();
+      // Safety net: if still stuck in loading after 15s (e.g. hanging fetch), surface error
+      window.setTimeout(() => {
+        if (!sessionEstablished.current) {
+          setLoadingError((prev) => prev || "اتصال به سرور برقرار نشد. لطفاً اتصال شبکه را بررسی و «تلاش دوباره» را بزنید. اگر روی Netlify هستید، مقدار DATABASE_URL را در Environment variables چک کنید.");
+        }
+      }, 15000);
+    }
     const keyHandler = (event: KeyboardEvent) => {
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") { event.preventDefault(); setSearchOpen(true); }
       if (event.key === "Escape") { setModal(null); setSearchOpen(false); setGuideOpen(false); setPreviewDoc(null); setCalc(null); setMatchRow(null); }
@@ -556,7 +590,12 @@ export default function Workspace() {
     { done: selected.pricingBasis !== "official" || !!selected.contractReference, title: "مبنای قراردادی", detail: "برای فهرست‌بها، ارجاع صریح پیمان ضروری است", target: "projects" as View },
   ] : [];
 
-  if (!data) return <div className={`loading-page ${dark ? "theme-dark" : ""}`}><div className="loading-logo">م</div><h1>مِترا</h1><p>{loadingError || "در حال آماده‌سازی فضای کاری شما..."}</p>{loadingError ? <><button className="button button-primary" onClick={() => void refresh()}>تلاش دوباره</button>{previewToken() && <button className="button button-outline" onClick={() => { if (window.confirm("فضای مهمان قبلی ممکن است قابل بازیابی نباشد. فضای جدید بسازیم؟ برای بازیابی اطلاعات حساب، پس از آن وارد شوید.")) { setPreviewToken(null); sessionEstablished.current = false; void refresh(false, true); } }}>شروع فضای جدید / ورود به حساب</button>}<a className="button button-outline" href="/" target="_blank" rel="noopener noreferrer">باز کردن سایت در برگه مستقل</a></> : <span className="loading-spinner" />}</div>;
+  if (!data) return <div className={`loading-page ${dark ? "theme-dark" : ""}`}><div className="loading-logo">م</div><h1>مِترا</h1><p>{loadingError || "در حال آماده‌سازی فضای کاری شما..."}</p>{loadingError ? <>
+    <p className="loading-hint">{loadingError.includes("DATABASE_URL") ? "راهنما: در Netlify به Site configuration → Environment variables بروید و DATABASE_URL معتبر (Neon/Supabase و ...) را تنظیم کنید، سپس دوباره Deploy کنید." : loadingError.includes("زمان پاسخگویی") ? "سرور در ۱۲ ثانیه پاسخ نداد — ممکن است دیتابیس در دسترس نباشد." : ""}</p>
+    <button className="button button-primary" onClick={() => void refresh()}>تلاش دوباره</button>
+    {previewToken() && <button className="button button-outline" onClick={() => { if (window.confirm("فضای مهمان قبلی ممکن است قابل بازیابی نباشد. فضای جدید بسازیم؟ برای بازیابی اطلاعات حساب، پس از آن وارد شوید.")) { setPreviewToken(null); sessionEstablished.current = false; void refresh(false, true); } }}>شروع فضای جدید / ورود به حساب</button>}
+    <a className="button button-outline" href="/api/health" target="_blank" rel="noopener noreferrer">بررسی وضعیت سرور</a>
+    </> : <span className="loading-spinner" />}</div>;
 
   return <div className={`app-frame ${dark ? "theme-dark" : ""}`} dir="rtl" onClickCapture={(event) => {
     if (!previewToken() || !(event.target instanceof Element)) return;

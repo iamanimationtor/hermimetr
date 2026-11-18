@@ -1,5 +1,5 @@
 import { drizzle } from "drizzle-orm/node-postgres";
-import { Pool } from "pg";
+import { Pool, type PoolConfig } from "pg";
 
 /**
  * Lazy database initialization — never throws at import time.
@@ -23,18 +23,33 @@ const globalForDb = globalThis as typeof globalThis & {
 
 function getDatabaseUrl(): string {
   const url = process.env.DATABASE_URL;
-  if (!url) throw new Error("DATABASE_URL is required");
-  return url;
+  if (!url || !url.trim()) throw new Error("DATABASE_URL is required");
+  return url.trim();
 }
 
 function createPool(): Pool {
-  return new Pool({
-    connectionString: getDatabaseUrl(),
+  const url = getDatabaseUrl();
+  const config: PoolConfig = {
+    connectionString: url,
     max: 3,
     idleTimeoutMillis: 10_000,
-    connectionTimeoutMillis: 10_000,
+    // Fail fast on unreachable hosts — the UI must not spin forever.
+    connectionTimeoutMillis: 7_000,
     allowExitOnIdle: true,
-  });
+    // Netlify/lambda: don't keep idle clients alive unnecessarily
+    keepAlive: false,
+  };
+  // Many managed Postgres providers (Neon, Supabase, etc.) require TLS.
+  // `pg` honours `?sslmode=require` in the URL in recent versions, but we
+  // also set it explicitly when the URL clearly points to a non-local host
+  // or already asks for SSL, to avoid silent connection hangs.
+  const needsSSL =
+    /sslmode=(require|verify-ca|verify-full)/i.test(url) ||
+    (process.env.NODE_ENV === "production" && !/(localhost|127\.0\.0\.1)/.test(url));
+  if (needsSSL) {
+    config.ssl = { rejectUnauthorized: false };
+  }
+  return new Pool(config);
 }
 
 function getPool(): Pool {
@@ -48,6 +63,8 @@ function getPool(): Pool {
   // reuses the same global across warm invocations.
   globalForDb.__hermimetrPool = pool;
   globalForDb.__arenaNextJsPostgresqlPool = pool;
+  // Surface pool-level errors to logs instead of crashing silently
+  pool.on("error", (err) => console.error("[db] pool error", err));
   return pool;
 }
 
