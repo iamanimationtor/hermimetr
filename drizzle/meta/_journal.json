@@ -15,6 +15,13 @@
       "when": 1795010639720,
       "tag": "0001_progress_reports",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1795014738833,
+      "tag": "0002_add_sync_states",
+      "breakpoints": true
     }
   ]
 }

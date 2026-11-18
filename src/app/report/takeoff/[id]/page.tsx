@@ -11,6 +11,7 @@ import { assessRows, loadRuleBank } from "@/lib/rules/server";
 
 type Step = { key: string; label: string; expression: string; substituted: string; value: string };
 const date = (value: Date) => new Intl.DateTimeFormat("fa-IR", { dateStyle: "long" }).format(value);
+const dateShort = (value: Date) => value.toISOString().slice(0,10);
 
 export const dynamic = "force-dynamic";
 
@@ -38,35 +39,61 @@ export default async function TakeoffReportPage({ params }: { params: Promise<{ 
   }
   return <main className="report-page" dir="rtl">
     <div className="report-tools"><Link href="/?view=takeoff" className="report-back">بازگشت به متره</Link><PrintButton /></div>
-    <header className="report-head"><div><div className="report-mark">م</div><span>مِترا <small>گزارش مهندسی پروژه</small></span></div><p>گزارش زنده متره · {date(new Date())}</p></header>
-    <section className="report-title"><span>ریزمتره و خلاصه متره</span><h1>{project.name}{project.isDemo ? " (آموزشی)" : ""}</h1>
-      <p>هر مقدار همراه با قاعده، نسخه قاعده، فرمول با مقادیر و منبع اندازه‌گیری آمده است. این گزارش نسخه ثابت نیست.</p></section>
-    <div className="report-meta">
+    <header className="report-head-detailed">
+      <div className="report-head-top">
+        <div className="report-brand"><div className="report-mark">م</div><span>مِترا <small>گزارش مهندسی پروژه — ریزمتره دقیق</small></span></div>
+        <div className="report-version-badge">گزارش زنده · {dateShort(new Date())}</div>
+      </div>
+      <h1 className="report-project-title">{project.name}{project.isDemo ? " (آموزشی)" : ""} <small>{project.code || ""}</small></h1>
+      <div className="report-project-meta">
+        <span>کارفرما: <strong>{project.employer || "—"}</strong></span>
+        <span>پیمانکار: <strong>{project.contractor || "—"}</strong></span>
+        <span>موقعیت: <strong>{[project.province, project.city].filter(Boolean).join("، ") || "—"}</strong></span>
+        <span>نوع: <strong>{project.type}</strong></span>
+      </div>
+      <div className="report-project-meta secondary">
+        <span>زیربنا: <strong>{project.area || "—"} م²</strong></span>
+        <span>طبقات/زیرزمین: <strong>{project.floors}/{project.basements}</strong></span>
+        <span>تاریخ مبنا: <strong>{project.estimateDate || "—"}</strong></span>
+        <span>مبنای قیمت: <strong>{project.pricingBasis === "official" ? "فهرست‌بها" : project.pricingBasis === "contractor" ? "پیمانکار" : "بازار"}</strong></span>
+      </div>
+    </header>
+    <div className="report-meta pro">
       <div><span>شناسه پروژه</span><strong>{project.code || "ثبت نشده"}</strong></div>
-      <div><span>تعداد ردیف</span><strong>{number(rows.length)}</strong></div>
-      <div><span>ردیف تأییدشده</span><strong>{number(rows.filter((row) => status(row) === "تأییدشده").length)}</strong></div>
-      <div><span>تاریخ مبنای برآورد</span><strong>{project.estimateDate || "ثبت نشده"}</strong></div>
+      <div><span>کل ردیف</span><strong>{number(rows.length)}</strong></div>
+      <div><span>تأییدشده</span><strong>{number(rows.filter((row) => status(row) === "تأییدشده").length)}</strong></div>
+      <div><span>دقت</span><strong>۴ رقم اعشار · نیم‌به‌بالا</strong></div>
     </div>
-    <h2>خلاصه متره</h2>
-    <table className="report-table"><thead><tr><th>دسته عملیات</th><th>واحد</th><th>جمع تأییدشده</th><th>جمع پیش‌نویس</th><th>تعداد ردیف</th></tr></thead><tbody>
+    <h2>خلاصه متره به تفکیک دسته و واحد</h2>
+    <table className="report-table grouped"><thead><tr><th>دسته عملیات</th><th>واحد</th><th>جمع تأییدشده</th><th>جمع پیش‌نویس</th><th>تعداد</th></tr></thead><tbody>
       {[...groups.values()].map((group) => <tr key={`${group.category}${group.unit}`}><td><strong>{group.category}</strong></td><td>{group.unit}</td>
         <td className="report-amount">{number(group.confirmed.toFixed(4))}</td><td>{number(group.draft.toFixed(4))}</td><td>{number(group.count)}</td></tr>)}
       {!rows.length && <tr><td colSpan={5}>هنوز ردیف متره‌ای ثبت نشده است.</td></tr>}
     </tbody></table>
-    <h2 style={{ marginTop: 28 }}>ریزمتره</h2>
-    <table className="report-table"><thead><tr><th>ردیف</th><th>شرح، قاعده و محاسبه</th><th>محل</th><th>مقدار</th><th>واحد</th><th>وضعیت</th></tr></thead><tbody>
+    <h2 style={{ marginTop: 28 }}>ریزمتره — مقادیر دقیق با فرمول و منبع</h2>
+    <table className="report-table pro"><thead><tr><th>ردیف</th><th>شرح، قاعده و محاسبه</th><th>طبقه / محل</th><th>مقدار</th><th>واحد</th><th>وضعیت</th></tr></thead><tbody>
       {rows.map((row, index) => <tr key={row.id}><td>{number(index + 1)}</td>
-        <td><strong>{row.title}</strong>
-          <small>{row.category} · {row.ruleKey ? `قاعده ${row.ruleKey} نسخه ${row.ruleVersion}` : "ثبت ساده هندسی"} · {certainty(row)}</small>
+        <td className="desc-cell"><strong>{row.title}</strong>
+          <small className="desc-meta">{row.category} · {row.ruleKey ? `قاعده ${row.ruleKey} نسخه ${row.ruleVersion}` : "ثبت ساده هندسی"} · {certainty(row)}</small>
           {row.ruleTrace
             ? (row.ruleTrace as unknown as Step[]).map((step) => <small key={step.key} className="report-step">{step.label}: <bdi dir="ltr">{step.substituted} = {step.value}</bdi></small>)
             : <small className="report-step">فرمول: <bdi dir="ltr">{row.formula}</bdi></small>}
-          <small>منبع مقدار: {row.sourceNote || "ثبت نشده"}</small></td>
+          <small>منبع مقدار: {row.sourceNote || "ثبت نشده"} {row.documentId ? "· دارای پیوست" : ""}</small></td>
         <td>{row.floor || "—"}<small>{row.location || ""}</small></td>
-        <td className="report-amount">{number(row.quantity)}</td><td>{row.unit}</td><td>{status(row)}</td></tr>)}
+        <td className="report-amount" dir="ltr">{number(row.quantity)}</td><td>{row.unit}</td><td><span className={`status-badge ${status(row)==="تأییدشده" ? "ok":"warn"}`}>{status(row)}</span></td></tr>)}
     </tbody></table>
-    <section className="report-notes"><h2>مبانی و محدودیت‌ها</h2>
-      <p>ردیف‌های آموزشی و نیازمند بازبینی در جمع‌های تأییدشده و پیش‌نویس لحاظ نشده‌اند. مقادیر «هندسی پایه» حاصل روابط هندسی‌اند و ضابطه پرداخت فهرست‌بها محسوب نمی‌شوند. مقادیر «آزمایشی» با قاعده‌ای محاسبه شده‌اند که سند مرجع یا تأیید متخصص آن کامل نیست و در برآورد قطعی به‌کار نمی‌روند. گرد کردن به روش نیم به بالا تا چهار رقم اعشار انجام شده است.</p></section>
-    <footer className="report-footer"><span>مِترا · ابزار مدیریت متره و برآورد</span><span>شناسه پروژه: {project.id}</span></footer>
+    <section className="report-notes pro"><h2>مبانی و دقت محاسبه</h2>
+      <ul className="report-bullets">
+        <li>تمام مقادیر با Decimal ۳۶ و گرد نیم‌به‌بالا تا ۴ رقم اعشار محاسبه شده و فرمول با مقادیر واقعی ثبت است.</li>
+        <li>ردیف‌های آموزشی و نیازمند بازبینی از جمع تأییدشده کنار گذاشته شده‌اند؛ «هندسی پایه» ضابطه پرداخت فهرست‌بها نیست.</li>
+        <li>منبع هر مقدار (نقشه/محل) و پیوست فایل در ستون مربوطه قابل ردیابی است.</li>
+      </ul>
+    </section>
+    <section className="report-signatures">
+      <div><span>مترور / تهیه‌کننده</span><strong>نام و امضا</strong><small>تاریخ ____ / ____ / ____</small></div>
+      <div><span>تأیید فنی</span><strong>نام و امضا</strong><small>تاریخ ____ / ____ / ____</small></div>
+      <div><span>کارفرما</span><strong>نام و امضا</strong><small>تاریخ ____ / ____ / ____</small></div>
+    </section>
+    <footer className="report-footer pro"><span>مِترا · گزارش زنده متره — نسخه ثابت نیست، پیش از برآورد تأیید شود</span><span>شناسه پروژه: {project.id.slice(0,8)}…</span></footer>
   </main>;
 }
