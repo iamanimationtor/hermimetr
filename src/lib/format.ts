@@ -8,3 +8,5 @@ export function formatPersianDecimal(value: string | number): string {
   const digits = "۰۱۲۳۴۵۶۷۸۹";
   return `${match[1] ? "−" : ""}${whole}${fraction ? `٫${fraction.replace(/\d/g, (digit) => digits[Number(digit)])}` : ""}`;
 }
+
+export { rialToWordsFa } from "./rial-words";
